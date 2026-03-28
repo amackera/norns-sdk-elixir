@@ -1,0 +1,176 @@
+defmodule NornsSdk.Worker do
+  @moduledoc """
+  Worker that connects to Norns, registers agents/tools, and handles tasks.
+
+  Add to your supervision tree:
+
+      children = [
+        {NornsSdk.Worker,
+         url: "http://localhost:4000",
+         api_key: "nrn_...",
+         llm_api_key: "sk-ant-...",
+         agent: my_agent}
+      ]
+  """
+
+  use Slipstream
+
+  require Logger
+
+  alias NornsSdk.Agent
+
+  def start_link(opts) do
+    {name, opts} = Keyword.pop(opts, :name, __MODULE__)
+    Slipstream.start_link(__MODULE__, opts, name: name)
+  end
+
+  @impl true
+  def init(opts) do
+    url = Keyword.fetch!(opts, :url)
+    api_key = Keyword.get(opts, :api_key, System.get_env("NORNS_API_KEY") || "")
+    llm_api_key = Keyword.get(opts, :llm_api_key, System.get_env("ANTHROPIC_API_KEY") || "")
+    agent = Keyword.fetch!(opts, :agent)
+    worker_id = Keyword.get(opts, :worker_id, "elixir-#{:crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)}")
+
+    tools_by_name = Map.new(agent.tools, fn mod -> {mod.__tool_name__(), mod} end)
+
+    ws_url =
+      url
+      |> String.trim_trailing("/")
+      |> String.replace("http://", "ws://")
+      |> String.replace("https://", "wss://")
+      |> Kernel.<>("/worker/websocket?token=#{api_key}&vsn=2.0.0")
+
+    state = %{
+      url: url,
+      llm_api_key: llm_api_key,
+      agent: agent,
+      worker_id: worker_id,
+      tools_by_name: tools_by_name
+    }
+
+    {:ok, state, {:connect, ws_url}}
+  end
+
+  @impl true
+  def handle_connect(socket) do
+    state = socket.assigns
+
+    join_payload = %{
+      "worker_id" => state.worker_id,
+      "tools" => Enum.map(state.agent.tools, fn mod -> mod.to_registration() end),
+      "capabilities" => ["llm", "tools"],
+      "agents" => [Agent.to_registration(state.agent)]
+    }
+
+    Logger.info("Connected to Norns, joining worker:lobby as #{state.worker_id}")
+    {:ok, join(socket, "worker:lobby", join_payload)}
+  end
+
+  @impl true
+  def handle_join("worker:lobby", _reply, socket) do
+    Logger.info("Joined worker:lobby")
+    {:ok, socket}
+  end
+
+  @impl true
+  def handle_message("worker:lobby", "llm_task", payload, socket) do
+    state = socket.assigns
+
+    Task.start(fn ->
+      result = execute_llm(payload, state.llm_api_key)
+      push(socket, "worker:lobby", "tool_result", Map.put(result, "task_id", payload["task_id"]))
+    end)
+
+    {:ok, socket}
+  end
+
+  def handle_message("worker:lobby", "tool_task", payload, socket) do
+    state = socket.assigns
+
+    Task.start(fn ->
+      result = execute_tool(payload, state.tools_by_name)
+      push(socket, "worker:lobby", "tool_result", Map.put(result, "task_id", payload["task_id"]))
+    end)
+
+    {:ok, socket}
+  end
+
+  def handle_message(_topic, _event, _payload, socket) do
+    {:ok, socket}
+  end
+
+  @impl true
+  def handle_disconnect(_reason, socket) do
+    Logger.warning("Disconnected from Norns, reconnecting...")
+    {:reconnect, socket}
+  end
+
+  # --- LLM Execution ---
+
+  defp execute_llm(task, api_key) do
+    model = task["model"] || "claude-sonnet-4-20250514"
+    system_prompt = task["system_prompt"] || ""
+    messages = task["messages"] || []
+
+    tools =
+      case task["opts"] do
+        opts when is_list(opts) -> Enum.find_value(opts, fn %{"tools" => t} -> t; _ -> nil end)
+        %{"tools" => t} -> t
+        _ -> nil
+      end
+
+    body =
+      %{model: model, max_tokens: 4096, system: system_prompt, messages: messages}
+      |> then(fn b -> if tools, do: Map.put(b, :tools, tools), else: b end)
+
+    case Req.post("https://api.anthropic.com/v1/messages",
+           json: body,
+           headers: [
+             {"x-api-key", api_key},
+             {"anthropic-version", "2023-06-01"},
+             {"content-type", "application/json"}
+           ],
+           receive_timeout: 120_000
+         ) do
+      {:ok, %Req.Response{status: 200, body: body}} ->
+        %{
+          "status" => "ok",
+          "content" => body["content"] || [],
+          "stop_reason" => body["stop_reason"],
+          "usage" => %{
+            "input_tokens" => get_in(body, ["usage", "input_tokens"]) || 0,
+            "output_tokens" => get_in(body, ["usage", "output_tokens"]) || 0
+          }
+        }
+
+      {:ok, %Req.Response{status: status, body: body}} ->
+        %{"status" => "error", "error" => inspect({status, body})}
+
+      {:error, reason} ->
+        %{"status" => "error", "error" => inspect(reason)}
+    end
+  end
+
+  # --- Tool Execution ---
+
+  defp execute_tool(task, tools_by_name) do
+    tool_name = task["tool_name"] || ""
+    input = task["input"] || %{}
+
+    case Map.get(tools_by_name, tool_name) do
+      nil ->
+        %{"status" => "error", "error" => "Unknown tool: #{tool_name}"}
+
+      mod ->
+        try do
+          case mod.execute(input) do
+            {:ok, result} -> %{"status" => "ok", "result" => to_string(result)}
+            {:error, reason} -> %{"status" => "error", "error" => to_string(reason)}
+          end
+        rescue
+          e -> %{"status" => "error", "error" => Exception.message(e)}
+        end
+    end
+  end
+end
