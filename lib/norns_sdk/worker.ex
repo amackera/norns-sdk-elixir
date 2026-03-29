@@ -17,7 +17,7 @@ defmodule NornsSdk.Worker do
 
   require Logger
 
-  alias NornsSdk.Agent
+  alias NornsSdk.Format
 
   def start_link(opts) do
     {name, opts} = Keyword.pop(opts, :name, __MODULE__)
@@ -59,8 +59,7 @@ defmodule NornsSdk.Worker do
     join_payload = %{
       "worker_id" => state.worker_id,
       "tools" => Enum.map(state.agent.tools, fn mod -> mod.to_registration() end),
-      "capabilities" => ["llm", "tools"],
-      "agents" => [Agent.to_registration(state.agent)]
+      "capabilities" => ["llm", "tools"]
     }
 
     Logger.info("Connected to Norns, joining worker:lobby as #{state.worker_id}")
@@ -107,22 +106,26 @@ defmodule NornsSdk.Worker do
   end
 
   # --- LLM Execution ---
+  # Receives tasks in neutral format, translates to Anthropic API, returns neutral format.
 
   defp execute_llm(task, api_key) do
     model = task["model"] || "claude-sonnet-4-20250514"
     system_prompt = task["system_prompt"] || ""
     messages = task["messages"] || []
+    tools = task["tools"] || []
 
-    tools =
-      case task["opts"] do
-        opts when is_list(opts) -> Enum.find_value(opts, fn %{"tools" => t} -> t; _ -> nil end)
-        %{"tools" => t} -> t
-        _ -> nil
-      end
+    # Translate neutral → Anthropic format
+    anthropic_messages = Format.to_anthropic_messages(messages)
 
     body =
-      %{model: model, max_tokens: 4096, system: system_prompt, messages: messages}
-      |> then(fn b -> if tools, do: Map.put(b, :tools, tools), else: b end)
+      %{model: model, max_tokens: 4096, system: system_prompt, messages: anthropic_messages}
+      |> then(fn b ->
+        if tools != [] do
+          Map.put(b, :tools, Format.to_anthropic_tools(tools))
+        else
+          b
+        end
+      end)
 
     case Req.post("https://api.anthropic.com/v1/messages",
            json: body,
@@ -134,15 +137,8 @@ defmodule NornsSdk.Worker do
            receive_timeout: 120_000
          ) do
       {:ok, %Req.Response{status: 200, body: body}} ->
-        %{
-          "status" => "ok",
-          "content" => body["content"] || [],
-          "stop_reason" => body["stop_reason"],
-          "usage" => %{
-            "input_tokens" => get_in(body, ["usage", "input_tokens"]) || 0,
-            "output_tokens" => get_in(body, ["usage", "output_tokens"]) || 0
-          }
-        }
+        # Translate Anthropic response → neutral format
+        Format.from_anthropic_response(body)
 
       {:ok, %Req.Response{status: status, body: body}} ->
         %{"status" => "error", "error" => inspect({status, body})}
