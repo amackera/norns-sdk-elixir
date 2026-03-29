@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/amackera/norns-sdk-elixir/actions/workflows/ci.yml/badge.svg)](https://github.com/amackera/norns-sdk-elixir/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Hex.pm](https://img.shields.io/hexpm/v/norns_sdk.svg)](https://hex.pm/packages/norns_sdk)
 
 Elixir SDK for [Norns](https://github.com/amackera/norns) — durable agent runtime on BEAM.
 
@@ -12,6 +13,13 @@ Define agents and tools in Elixir, connect to Norns as a worker or interact with
 ```elixir
 {:norns_sdk, "~> 0.1"}
 ```
+
+## Quickstart
+
+1. Start Norns locally (`docker compose up` in the Norns repo).
+2. Set `NORNS_API_KEY` and `ANTHROPIC_API_KEY` in your environment.
+3. Start your worker under your supervision tree.
+4. Use `NornsSdk.Client.send_message/4` to trigger runs and inspect events.
 
 ## Worker — define agents and tools
 
@@ -76,6 +84,11 @@ IO.puts(result.output)
 # Inspect runs
 {:ok, events} = NornsSdk.Client.get_events(client, 42)
 ```
+
+## Docs
+
+- [Release checklist](docs/release-v0.1-checklist.md)
+- [Changelog](CHANGELOG.md)
 
 ## License
 

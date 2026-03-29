@@ -9,7 +9,9 @@ defmodule NornsSdk.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description: "Elixir SDK for Norns — durable agent runtime on BEAM",
-      package: package()
+      package: package(),
+      source_url: "https://github.com/amackera/norns-sdk-elixir",
+      docs: [main: "readme", extras: ["README.md", "CHANGELOG.md"]]
     ]
   end
 
@@ -35,6 +37,8 @@ defmodule NornsSdk.MixProject do
   defp package do
     [
       licenses: ["MIT"],
+      maintainers: ["Anson Mackera"],
+      files: ~w(lib mix.exs README.md LICENSE CHANGELOG.md),
       links: %{
         "GitHub" => "https://github.com/amackera/norns-sdk-elixir",
         "Norns Runtime" => "https://github.com/amackera/norns"
