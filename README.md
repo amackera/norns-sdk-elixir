@@ -1,5 +1,8 @@
 # NornsSdk
 
+[![CI](https://github.com/amackera/norns-sdk-elixir/actions/workflows/ci.yml/badge.svg)](https://github.com/amackera/norns-sdk-elixir/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Elixir SDK for [Norns](https://github.com/amackera/norns) — durable agent runtime on BEAM.
 
 Define agents and tools in Elixir, connect to Norns as a worker or interact with agents as a client.
