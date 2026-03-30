@@ -2,6 +2,7 @@ defmodule NornsSdk.FormatTest do
   use ExUnit.Case, async: true
 
   alias NornsSdk.Format
+  alias ReqLLM.Message.ContentPart
 
   # --- to_anthropic_messages/1 ---
 
@@ -172,5 +173,142 @@ defmodule NornsSdk.FormatTest do
     }
 
     assert Format.from_anthropic_response(body)["content"] == "First.\nSecond."
+  end
+
+  # --- normalize_model/1 ---
+
+  test "passes through model with provider prefix" do
+    assert Format.normalize_model("anthropic:claude-sonnet-4-20250514") == "anthropic:claude-sonnet-4-20250514"
+    assert Format.normalize_model("openai:gpt-4o") == "openai:gpt-4o"
+  end
+
+  test "infers anthropic for claude models" do
+    assert Format.normalize_model("claude-sonnet-4-20250514") == "anthropic:claude-sonnet-4-20250514"
+    assert Format.normalize_model("claude-haiku-4-5-20251001") == "anthropic:claude-haiku-4-5-20251001"
+  end
+
+  test "infers openai for gpt/o1/o3 models" do
+    assert Format.normalize_model("gpt-4o") == "openai:gpt-4o"
+    assert Format.normalize_model("o1-preview") == "openai:o1-preview"
+    assert Format.normalize_model("o3-mini") == "openai:o3-mini"
+  end
+
+  test "infers google for gemini models" do
+    assert Format.normalize_model("gemini-2.0-flash") == "google:gemini-2.0-flash"
+  end
+
+  test "defaults to anthropic for unknown models" do
+    assert Format.normalize_model("some-custom-model") == "anthropic:some-custom-model"
+  end
+
+  # --- to_req_llm_context/1 ---
+
+  test "converts neutral messages to ReqLLM context" do
+    messages = [
+      %{"role" => "user", "content" => "Hello"},
+      %{"role" => "assistant", "content" => "Hi there"}
+    ]
+
+    ctx = Format.to_req_llm_context(messages)
+    assert %ReqLLM.Context{} = ctx
+    assert length(ctx.messages) == 2
+    assert Enum.at(ctx.messages, 0).role == :user
+    assert Enum.at(ctx.messages, 1).role == :assistant
+  end
+
+  test "converts tool call messages to ReqLLM context" do
+    messages = [
+      %{
+        "role" => "assistant",
+        "content" => "Searching...",
+        "tool_calls" => [%{"id" => "tc_1", "name" => "search", "arguments" => %{"q" => "test"}}]
+      },
+      %{"role" => "tool", "tool_call_id" => "tc_1", "name" => "search", "content" => "found it"}
+    ]
+
+    ctx = Format.to_req_llm_context(messages)
+    assert length(ctx.messages) == 2
+    assistant_msg = Enum.at(ctx.messages, 0)
+    assert assistant_msg.role == :assistant
+    assert assistant_msg.tool_calls != nil
+    assert length(assistant_msg.tool_calls) == 1
+
+    tool_msg = Enum.at(ctx.messages, 1)
+    assert tool_msg.role == :tool
+    assert tool_msg.tool_call_id == "tc_1"
+  end
+
+  # --- to_req_llm_tools/1 ---
+
+  test "converts neutral tool defs to ReqLLM tools" do
+    tools = [
+      %{"name" => "search", "description" => "Search things", "parameters" => %{"type" => "object"}}
+    ]
+
+    result = Format.to_req_llm_tools(tools)
+    assert length(result) == 1
+    assert %ReqLLM.Tool{} = hd(result)
+    assert hd(result).name == "search"
+  end
+
+  # --- from_req_llm_response/1 ---
+
+  test "converts text-only ReqLLM response to neutral format" do
+    response = %ReqLLM.Response{
+      id: "test",
+      model: "anthropic:claude-sonnet-4-20250514",
+      context: ReqLLM.Context.new(),
+      message: %ReqLLM.Message{
+        role: :assistant,
+        content: [ContentPart.text("Hello!")]
+      },
+      finish_reason: :stop,
+      usage: %{input_tokens: 10, output_tokens: 5}
+    }
+
+    result = Format.from_req_llm_response(response)
+    assert result["status"] == "ok"
+    assert result["content"] == "Hello!"
+    assert result["finish_reason"] == "stop"
+    assert result["usage"]["input_tokens"] == 10
+    assert result["usage"]["output_tokens"] == 5
+    refute Map.has_key?(result, "tool_calls")
+  end
+
+  test "converts ReqLLM response with tool calls to neutral format" do
+    tc = ReqLLM.ToolCall.new("tc_1", "search", Jason.encode!(%{"q" => "cats"}))
+
+    response = %ReqLLM.Response{
+      id: "test",
+      model: "anthropic:claude-sonnet-4-20250514",
+      context: ReqLLM.Context.new(),
+      message: %ReqLLM.Message{
+        role: :assistant,
+        content: [ContentPart.text("Searching...")],
+        tool_calls: [tc]
+      },
+      finish_reason: :tool_calls,
+      usage: %{input_tokens: 20, output_tokens: 15}
+    }
+
+    result = Format.from_req_llm_response(response)
+    assert result["finish_reason"] == "tool_call"
+    assert [tool_call] = result["tool_calls"]
+    assert tool_call["id"] == "tc_1"
+    assert tool_call["name"] == "search"
+    assert tool_call["arguments"] == %{"q" => "cats"}
+  end
+
+  test "maps ReqLLM :length finish reason" do
+    response = %ReqLLM.Response{
+      id: "test",
+      model: "test",
+      context: ReqLLM.Context.new(),
+      message: %ReqLLM.Message{role: :assistant, content: []},
+      finish_reason: :length,
+      usage: %{}
+    }
+
+    assert Format.from_req_llm_response(response)["finish_reason"] == "length"
   end
 end

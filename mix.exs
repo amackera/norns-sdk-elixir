@@ -24,6 +24,7 @@ defmodule NornsSdk.MixProject do
   defp deps do
     [
       {:req, "~> 0.5"},
+      {:req_llm, "~> 1.9"},
       {:slipstream, "~> 1.0"},
       {:jason, "~> 1.4"},
 

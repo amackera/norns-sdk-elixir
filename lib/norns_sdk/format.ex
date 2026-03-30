@@ -1,7 +1,7 @@
 defmodule NornsSdk.Format do
   @moduledoc """
   Translates between the provider-neutral wire format (used by the Norns
-  orchestrator) and the Anthropic API format.
+  orchestrator) and ReqLLM's types.
 
   ## Neutral format
 
@@ -16,7 +16,103 @@ defmodule NornsSdk.Format do
   Finish reasons: `"stop"`, `"tool_call"`, `"length"`, `"error"`
   """
 
-  # --- Neutral → Anthropic API ---
+  alias ReqLLM.Context
+  alias ReqLLM.ToolCall
+
+  # --- Neutral → ReqLLM ---
+
+  @doc """
+  Normalize a model string to ReqLLM's `provider:model` format.
+
+  If the string already contains a colon, it's passed through.
+  Otherwise, infers the provider from the model name (claude → anthropic,
+  gpt/o1/o3 → openai, gemini → google).
+  """
+  @spec normalize_model(String.t()) :: String.t()
+  def normalize_model(model) do
+    if String.contains?(model, ":") do
+      model
+    else
+      provider = infer_provider(model)
+      "#{provider}:#{model}"
+    end
+  end
+
+  @doc "Convert neutral-format messages to a ReqLLM Context."
+  @spec to_req_llm_context([map()]) :: Context.t()
+  def to_req_llm_context(messages) do
+    messages
+    |> Enum.map(&neutral_msg_to_req_llm/1)
+    |> Context.new()
+  end
+
+  @doc "Convert neutral tool definitions to ReqLLM Tool structs."
+  @spec to_req_llm_tools([map()]) :: [ReqLLM.Tool.t()]
+  def to_req_llm_tools(tools) do
+    Enum.flat_map(tools, fn tool ->
+      case ReqLLM.Tool.new(
+             name: tool["name"],
+             description: tool["description"] || "",
+             parameter_schema: tool["parameters"] || tool["input_schema"] || %{},
+             callback: fn _args -> {:ok, "noop"} end
+           ) do
+        {:ok, t} -> [t]
+        {:error, _} -> []
+      end
+    end)
+  end
+
+  # --- ReqLLM → Neutral ---
+
+  @doc "Convert a ReqLLM Response to neutral wire format."
+  @spec from_req_llm_response(ReqLLM.Response.t()) :: map()
+  def from_req_llm_response(response) do
+    text = ReqLLM.Response.text(response) || ""
+    tool_calls = extract_tool_calls(response)
+
+    result = %{
+      "status" => "ok",
+      "content" => text,
+      "finish_reason" => normalize_finish_reason(response.finish_reason),
+      "usage" => normalize_usage(response.usage)
+    }
+
+    if tool_calls != [] do
+      Map.put(result, "tool_calls", tool_calls)
+    else
+      result
+    end
+  end
+
+  defp extract_tool_calls(response) do
+    response
+    |> ReqLLM.Response.tool_calls()
+    |> Enum.map(fn tc ->
+      %{
+        "id" => tc.id,
+        "name" => ToolCall.name(tc),
+        "arguments" => ToolCall.args_map(tc) || %{}
+      }
+    end)
+  end
+
+  defp normalize_finish_reason(:stop), do: "stop"
+  defp normalize_finish_reason(:tool_calls), do: "tool_call"
+  defp normalize_finish_reason(:length), do: "length"
+  defp normalize_finish_reason(:error), do: "error"
+  defp normalize_finish_reason(other) when is_atom(other), do: to_string(other)
+  defp normalize_finish_reason(_), do: "stop"
+
+  defp normalize_usage(nil), do: %{"input_tokens" => 0, "output_tokens" => 0}
+
+  defp normalize_usage(usage) do
+    %{
+      "input_tokens" => usage[:input_tokens] || usage["input_tokens"] || 0,
+      "output_tokens" => usage[:output_tokens] || usage["output_tokens"] || 0
+    }
+  end
+
+  # --- Neutral → Anthropic API (kept for direct API use / testing) ---
 
   @doc "Convert neutral-format messages to Anthropic API format."
   def to_anthropic_messages(messages) do
@@ -35,8 +131,6 @@ defmodule NornsSdk.Format do
       }
     end)
   end
-
-  # --- Anthropic API → Neutral ---
 
   @doc "Convert an Anthropic API response body to neutral format."
   def from_anthropic_response(body) do
@@ -80,7 +174,50 @@ defmodule NornsSdk.Format do
     end
   end
 
-  # --- Internal ---
+  # --- Internal helpers ---
+
+  defp infer_provider(model) do
+    cond do
+      String.starts_with?(model, "claude") -> "anthropic"
+      String.starts_with?(model, "gpt") -> "openai"
+      String.starts_with?(model, "o1") or String.starts_with?(model, "o3") -> "openai"
+      String.starts_with?(model, "gemini") -> "google"
+      String.starts_with?(model, "mistral") or String.starts_with?(model, "codestral") -> "mistral"
+      true -> "anthropic"
+    end
+  end
+
+  defp neutral_msg_to_req_llm(%{"role" => "user", "content" => content}) do
+    Context.user(content)
+  end
+
+  defp neutral_msg_to_req_llm(%{"role" => "system", "content" => content}) do
+    Context.system(content)
+  end
+
+  defp neutral_msg_to_req_llm(%{"role" => "assistant"} = msg) do
+    text = msg["content"] || ""
+    tool_calls = msg["tool_calls"] || []
+
+    if tool_calls != [] do
+      req_tool_calls =
+        Enum.map(tool_calls, fn tc ->
+          ToolCall.new(tc["id"], tc["name"], Jason.encode!(tc["arguments"] || %{}))
+        end)
+
+      Context.assistant(text, tool_calls: req_tool_calls)
+    else
+      Context.assistant(text)
+    end
+  end
+
+  defp neutral_msg_to_req_llm(%{"role" => "tool"} = msg) do
+    Context.tool_result(
+      msg["tool_call_id"],
+      msg["name"] || "",
+      msg["content"] || ""
+    )
+  end
 
   defp convert_chunk([%{"role" => "tool"} | _] = tool_msgs) do
     tool_results =

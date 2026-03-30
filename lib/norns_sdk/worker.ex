@@ -2,6 +2,10 @@ defmodule NornsSdk.Worker do
   @moduledoc """
   Worker that connects to Norns, registers agents/tools, and handles tasks.
 
+  Uses ReqLLM for LLM calls, supporting any provider (Anthropic, OpenAI, Google, etc.).
+  The provider is inferred from the agent's model string (e.g. `"anthropic:claude-sonnet-4-20250514"`
+  or just `"claude-sonnet-4-20250514"`).
+
   Add to your supervision tree:
 
       children = [
@@ -11,6 +15,10 @@ defmodule NornsSdk.Worker do
          llm_api_key: "sk-ant-...",
          agent: my_agent}
       ]
+
+  The `llm_api_key` option is passed per-request to ReqLLM. You can also configure
+  API keys via environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.)
+  or application config — see ReqLLM docs.
   """
 
   use Slipstream
@@ -106,44 +114,33 @@ defmodule NornsSdk.Worker do
   end
 
   # --- LLM Execution ---
-  # Receives tasks in neutral format, translates to Anthropic API, returns neutral format.
+  # Receives tasks in neutral format, calls LLM via ReqLLM, returns neutral format.
 
   defp execute_llm(task, api_key) do
-    model = task["model"] || "claude-sonnet-4-20250514"
+    model_str = task["model"] || "claude-sonnet-4-20250514"
     system_prompt = task["system_prompt"] || ""
     messages = task["messages"] || []
     tools = task["tools"] || []
 
-    # Translate neutral → Anthropic format
-    anthropic_messages = Format.to_anthropic_messages(messages)
+    # Normalize model string to ReqLLM format (e.g. "anthropic:claude-sonnet-4-20250514")
+    model_id = Format.normalize_model(model_str)
 
-    body =
-      %{model: model, max_tokens: 4096, system: system_prompt, messages: anthropic_messages}
-      |> then(fn b ->
-        if tools != [] do
-          Map.put(b, :tools, Format.to_anthropic_tools(tools))
-        else
-          b
-        end
-      end)
+    # Build ReqLLM context from neutral messages
+    context = Format.to_req_llm_context(messages)
 
-    case Req.post("https://api.anthropic.com/v1/messages",
-           json: body,
-           headers: [
-             {"x-api-key", api_key},
-             {"anthropic-version", "2023-06-01"},
-             {"content-type", "application/json"}
-           ],
-           receive_timeout: 120_000
-         ) do
-      {:ok, %Req.Response{status: 200, body: body}} ->
-        # Translate Anthropic response → neutral format
-        Format.from_anthropic_response(body)
+    # Build ReqLLM tool definitions
+    req_tools = Format.to_req_llm_tools(tools)
 
-      {:ok, %Req.Response{status: status, body: body}} ->
-        %{"status" => "error", "error" => inspect({status, body})}
+    opts =
+      [max_tokens: 4096, system_prompt: system_prompt, api_key: api_key]
+      |> then(fn o -> if req_tools != [], do: Keyword.put(o, :tools, req_tools), else: o end)
+
+    case ReqLLM.generate_text(model_id, context, opts) do
+      {:ok, response} ->
+        Format.from_req_llm_response(response)
 
       {:error, reason} ->
+        Logger.error("LLM call failed: #{inspect(reason)}")
         %{"status" => "error", "error" => inspect(reason)}
     end
   end
