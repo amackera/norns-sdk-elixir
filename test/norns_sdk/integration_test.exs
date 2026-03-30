@@ -159,7 +159,7 @@ defmodule NornsSdk.IntegrationTest do
     # Verify events were logged
     {:ok, events} = Client.get_events(c, result.run_id)
     assert is_list(events)
-    assert length(events) > 0
+    assert events != []
     event_types = MapSet.new(events, & &1["event_type"])
     assert "llm_response" in event_types
   end

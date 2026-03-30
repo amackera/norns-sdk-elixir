@@ -11,6 +11,11 @@ All notable changes to `norns_sdk` are documented in this file.
 - Release checklist docs
 - README badges and usage examples
 
+### Known limitations
+- Only Anthropic is supported as an LLM provider.
+- Client streaming is not yet implemented (use `send_message` with `wait: true` and polling).
+- The Anthropic API endpoint is not configurable.
+
 ### Notes
 - This is an early v0.1 release focused on core worker/client flows.
 - API contracts will continue to harden alongside Norns runtime releases.

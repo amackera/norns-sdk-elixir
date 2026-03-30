@@ -28,6 +28,7 @@ defmodule NornsSdk.MixProject do
       {:jason, "~> 1.4"},
 
       # Dev / CI
+      {:ex_doc, "~> 0.35", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false}

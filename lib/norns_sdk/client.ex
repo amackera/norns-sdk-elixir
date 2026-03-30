@@ -59,26 +59,20 @@ defmodule NornsSdk.Client do
   # --- Messages ---
 
   def send_message(%__MODULE__{} = client, agent, content, opts \\ []) do
-    agent_id = resolve_agent_id(client, agent)
-    conversation_key = Keyword.get(opts, :conversation_key)
-    wait = Keyword.get(opts, :wait, false)
-    timeout = Keyword.get(opts, :timeout, 30_000)
-
-    body =
-      %{"content" => content}
-      |> maybe_put("conversation_key", conversation_key)
-
-    case post(client, "/api/v1/agents/#{agent_id}/messages", body) do
-      {:ok, %{"run_id" => run_id, "status" => status}} ->
-        if wait do
-          poll_until_complete(client, run_id, timeout)
-        else
-          {:ok, %{run_id: run_id, status: status, output: nil}}
-        end
-
-      error ->
-        error
+    with {:ok, agent_id} <- resolve_agent_id(client, agent),
+         {:ok, %{"run_id" => run_id, "status" => status}} <-
+           post(client, "/api/v1/agents/#{agent_id}/messages", message_body(content, opts)) do
+      if Keyword.get(opts, :wait, false) do
+        poll_until_complete(client, run_id, Keyword.get(opts, :timeout, 30_000))
+      else
+        {:ok, %{run_id: run_id, status: status, output: nil}}
+      end
     end
+  end
+
+  defp message_body(content, opts) do
+    %{"content" => content}
+    |> maybe_put("conversation_key", Keyword.get(opts, :conversation_key))
   end
 
   # --- Runs ---
@@ -100,26 +94,27 @@ defmodule NornsSdk.Client do
   # --- Conversations ---
 
   def list_conversations(%__MODULE__{} = client, agent) do
-    agent_id = resolve_agent_id(client, agent)
-
-    case get(client, "/api/v1/agents/#{agent_id}/conversations") do
-      {:ok, %{"data" => convos}} -> {:ok, convos}
-      error -> error
+    with {:ok, agent_id} <- resolve_agent_id(client, agent) do
+      case get(client, "/api/v1/agents/#{agent_id}/conversations") do
+        {:ok, %{"data" => convos}} -> {:ok, convos}
+        error -> error
+      end
     end
   end
 
   def get_conversation(%__MODULE__{} = client, agent, key) do
-    agent_id = resolve_agent_id(client, agent)
-
-    case get(client, "/api/v1/agents/#{agent_id}/conversations/#{key}") do
-      {:ok, %{"data" => convo}} -> {:ok, convo}
-      error -> error
+    with {:ok, agent_id} <- resolve_agent_id(client, agent) do
+      case get(client, "/api/v1/agents/#{agent_id}/conversations/#{key}") do
+        {:ok, %{"data" => convo}} -> {:ok, convo}
+        error -> error
+      end
     end
   end
 
   def delete_conversation(%__MODULE__{} = client, agent, key) do
-    agent_id = resolve_agent_id(client, agent)
-    delete(client, "/api/v1/agents/#{agent_id}/conversations/#{key}")
+    with {:ok, agent_id} <- resolve_agent_id(client, agent) do
+      delete(client, "/api/v1/agents/#{agent_id}/conversations/#{key}")
+    end
   end
 
   # --- Internal ---
@@ -148,12 +143,12 @@ defmodule NornsSdk.Client do
     end
   end
 
-  defp resolve_agent_id(_client, id) when is_integer(id), do: id
+  defp resolve_agent_id(_client, id) when is_integer(id), do: {:ok, id}
 
   defp resolve_agent_id(client, name) when is_binary(name) do
     case get_agent(client, name) do
-      {:ok, %{"id" => id}} -> id
-      _ -> raise "Agent not found: #{name}"
+      {:ok, %{"id" => id}} -> {:ok, id}
+      {:error, _} = error -> error
     end
   end
 
@@ -168,6 +163,7 @@ defmodule NornsSdk.Client do
   defp post(client, path, body) do
     case Req.post(client.base_url <> path, json: body, headers: auth_headers(client)) do
       {:ok, %Req.Response{status: status, body: body}} when status in 200..299 -> {:ok, body}
+      {:ok, %Req.Response{status: status, body: body}} -> {:error, {status, body}}
       {:error, reason} -> {:error, reason}
     end
   end
