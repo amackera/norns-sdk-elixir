@@ -56,6 +56,24 @@ defmodule NornsSdk.Client do
     end
   end
 
+  def create_agent(%__MODULE__{} = client, %NornsSdk.Agent{} = agent) do
+    post(client, "/api/v1/agents", agent_body(agent))
+  end
+
+  def update_agent(%__MODULE__{} = client, id, %NornsSdk.Agent{} = agent) when is_integer(id) do
+    put(client, "/api/v1/agents/#{id}", agent_body(agent))
+  end
+
+  def ensure_agent(%__MODULE__{} = client, %NornsSdk.Agent{} = agent) do
+    case get_agent(client, agent.name) do
+      {:ok, %{"id" => id}} ->
+        update_agent(client, id, agent)
+
+      {:error, :not_found} ->
+        create_agent(client, agent)
+    end
+  end
+
   # --- Messages ---
 
   def send_message(%__MODULE__{} = client, agent, content, opts \\ []) do
@@ -168,6 +186,14 @@ defmodule NornsSdk.Client do
     end
   end
 
+  defp put(client, path, body) do
+    case Req.put(client.base_url <> path, json: body, headers: auth_headers(client)) do
+      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 -> {:ok, body}
+      {:ok, %Req.Response{status: status, body: body}} -> {:error, {status, body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp delete(client, path) do
     case Req.delete(client.base_url <> path, headers: auth_headers(client)) do
       {:ok, %Req.Response{status: status}} when status in 200..299 -> :ok
@@ -178,6 +204,23 @@ defmodule NornsSdk.Client do
 
   defp auth_headers(client) do
     [{"authorization", "Bearer #{client.api_key}"}]
+  end
+
+  defp agent_body(%NornsSdk.Agent{} = agent) do
+    %{
+      "name" => agent.name,
+      "system_prompt" => agent.system_prompt,
+      "status" => "idle",
+      "model" => agent.model,
+      "max_steps" => agent.max_steps,
+      "model_config" => %{
+        "mode" => to_string(agent.mode),
+        "checkpoint_policy" => to_string(agent.checkpoint_policy),
+        "context_strategy" => to_string(agent.context_strategy),
+        "context_window" => agent.context_window,
+        "on_failure" => to_string(agent.on_failure)
+      }
+    }
   end
 
   defp maybe_put(map, _key, nil), do: map

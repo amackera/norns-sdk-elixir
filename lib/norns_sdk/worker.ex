@@ -40,6 +40,10 @@ defmodule NornsSdk.Worker do
     agent = Keyword.fetch!(opts, :agent)
     worker_id = Keyword.get(opts, :worker_id, "elixir-#{:crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)}")
 
+    # Create or update the agent on the server so code changes are always picked up
+    client = NornsSdk.Client.new(url, api_key: api_key)
+    NornsSdk.Client.ensure_agent(client, agent)
+
     tools_by_name = Map.new(agent.tools, fn mod -> {mod.__tool_name__(), mod} end)
 
     ws_url =
