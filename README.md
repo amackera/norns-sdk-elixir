@@ -4,9 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Hex.pm](https://img.shields.io/hexpm/v/norns_sdk.svg)](https://hex.pm/packages/norns_sdk)
 
-Elixir SDK for [Norns](https://github.com/nornscode/norns) — durable agent runtime on BEAM.
-
-Define agents and tools in Elixir, connect to Norns as a worker or interact with agents as a client.
+Elixir SDK for [Norns](https://github.com/nornscode/norns). Define agents and tools, connect as a worker, or send messages as a client.
 
 ## Install
 
@@ -18,10 +16,10 @@ Define agents and tools in Elixir, connect to Norns as a worker or interact with
 
 1. Start Norns locally (`docker compose up` in the Norns repo).
 2. Set `NORNS_API_KEY` and `ANTHROPIC_API_KEY` in your environment.
-3. Start your worker under your supervision tree.
-4. Use `NornsSdk.Client.send_message/4` to trigger runs and inspect events.
+3. Add the worker to your supervision tree.
+4. Send messages with `NornsSdk.Client.send_message/4`.
 
-## Worker — define agents and tools
+## Worker
 
 ```elixir
 defmodule MyTools.SearchDocs do
@@ -53,7 +51,6 @@ agent = NornsSdk.Agent.new(
   mode: :conversation
 )
 
-# Add to your supervision tree
 children = [
   {NornsSdk.Worker,
    url: "http://localhost:4000",
@@ -65,7 +62,7 @@ children = [
 
 The worker connects via WebSocket, registers the agent and tools, and handles LLM + tool tasks from the orchestrator. Reconnects automatically.
 
-## Client — send messages and query results
+## Client
 
 ```elixir
 client = NornsSdk.Client.new("http://localhost:4000", api_key: "nrn_...")
