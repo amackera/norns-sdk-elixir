@@ -4,3 +4,6 @@
 *.beam
 *.ez
 .elixir_ls/
+
+# Generated ExDoc output
+/doc/
