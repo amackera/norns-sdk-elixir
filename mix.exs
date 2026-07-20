@@ -39,7 +39,7 @@ defmodule NornsSdk.MixProject do
   defp package do
     [
       licenses: ["MIT"],
-      maintainers: ["Anson Mackera"],
+      maintainers: ["Anson MacKeracher"],
       files: ~w(lib mix.exs README.md LICENSE CHANGELOG.md),
       links: %{
         "GitHub" => "https://github.com/nornscode/norns-sdk-elixir",
