@@ -16,6 +16,8 @@ defmodule NornsSdk.Client do
       result.output
   """
 
+  alias NornsSdk.{AgentResponse, ConversationResponse, EventResponse, MessageResult, RunResponse}
+
   defstruct [:base_url, :api_key]
 
   @type t :: %__MODULE__{base_url: String.t(), api_key: String.t()}
@@ -31,14 +33,14 @@ defmodule NornsSdk.Client do
 
   def list_agents(%__MODULE__{} = client) do
     case get(client, "/api/v1/agents") do
-      {:ok, %{"data" => agents}} -> {:ok, agents}
+      {:ok, %{"data" => agents}} -> {:ok, Enum.map(agents, &AgentResponse.from_map/1)}
       error -> error
     end
   end
 
   def get_agent(%__MODULE__{} = client, id) when is_integer(id) do
     case get(client, "/api/v1/agents/#{id}") do
-      {:ok, %{"data" => agent}} -> {:ok, agent}
+      {:ok, %{"data" => agent}} -> {:ok, AgentResponse.from_map(agent)}
       error -> error
     end
   end
@@ -46,7 +48,7 @@ defmodule NornsSdk.Client do
   def get_agent(%__MODULE__{} = client, name) when is_binary(name) do
     case list_agents(client) do
       {:ok, agents} ->
-        case Enum.find(agents, &(&1["name"] == name)) do
+        case Enum.find(agents, &(&1.name == name)) do
           nil -> {:error, :not_found}
           agent -> {:ok, agent}
         end
@@ -57,16 +59,22 @@ defmodule NornsSdk.Client do
   end
 
   def create_agent(%__MODULE__{} = client, %NornsSdk.Agent{} = agent) do
-    post(client, "/api/v1/agents", agent_body(agent))
+    case post(client, "/api/v1/agents", agent_body(agent)) do
+      {:ok, %{"data" => a}} -> {:ok, AgentResponse.from_map(a)}
+      error -> error
+    end
   end
 
   def update_agent(%__MODULE__{} = client, id, %NornsSdk.Agent{} = agent) when is_integer(id) do
-    put(client, "/api/v1/agents/#{id}", agent_body(agent))
+    case put(client, "/api/v1/agents/#{id}", agent_body(agent)) do
+      {:ok, %{"data" => a}} -> {:ok, AgentResponse.from_map(a)}
+      error -> error
+    end
   end
 
   def ensure_agent(%__MODULE__{} = client, %NornsSdk.Agent{} = agent) do
     case get_agent(client, agent.name) do
-      {:ok, %{"id" => id}} ->
+      {:ok, %AgentResponse{id: id}} ->
         update_agent(client, id, agent)
 
       {:error, :not_found} ->
@@ -78,14 +86,39 @@ defmodule NornsSdk.Client do
 
   def send_message(%__MODULE__{} = client, agent, content, opts \\ []) do
     with {:ok, agent_id} <- resolve_agent_id(client, agent),
-         {:ok, %{"run_id" => run_id, "status" => status}} <-
+         {:ok, %{"run_id" => run_id} = resp} <-
            post(client, "/api/v1/agents/#{agent_id}/messages", message_body(content, opts)) do
       if Keyword.get(opts, :wait, false) do
-        poll_until_complete(client, run_id, Keyword.get(opts, :timeout, 30_000))
+        await_result(client, run_id, opts)
       else
-        {:ok, %{run_id: run_id, status: status, output: nil}}
+        {:ok, accepted_result(run_id, resp, opts)}
       end
     end
+  end
+
+  defp await_result(client, run_id, opts) do
+    case poll_until_complete(client, run_id, Keyword.get(opts, :timeout, 30_000)) do
+      {:ok, %RunResponse{} = run} ->
+        {:ok,
+         %MessageResult{
+           run_id: run_id,
+           status: run.status,
+           output: run.output,
+           conversation_key: Keyword.get(opts, :conversation_key)
+         }}
+
+      error ->
+        error
+    end
+  end
+
+  defp accepted_result(run_id, resp, opts) do
+    %MessageResult{
+      run_id: run_id,
+      status: Map.get(resp, "status", "accepted"),
+      output: nil,
+      conversation_key: Keyword.get(opts, :conversation_key)
+    }
   end
 
   defp message_body(content, opts) do
@@ -97,14 +130,14 @@ defmodule NornsSdk.Client do
 
   def get_run(%__MODULE__{} = client, run_id) do
     case get(client, "/api/v1/runs/#{run_id}") do
-      {:ok, %{"data" => run}} -> {:ok, run}
+      {:ok, %{"data" => run}} -> {:ok, RunResponse.from_map(run)}
       error -> error
     end
   end
 
   def get_events(%__MODULE__{} = client, run_id) do
     case get(client, "/api/v1/runs/#{run_id}/events") do
-      {:ok, %{"data" => events}} -> {:ok, events}
+      {:ok, %{"data" => events}} -> {:ok, Enum.map(events, &EventResponse.from_map/1)}
       error -> error
     end
   end
@@ -114,7 +147,7 @@ defmodule NornsSdk.Client do
   def list_conversations(%__MODULE__{} = client, agent) do
     with {:ok, agent_id} <- resolve_agent_id(client, agent) do
       case get(client, "/api/v1/agents/#{agent_id}/conversations") do
-        {:ok, %{"data" => convos}} -> {:ok, convos}
+        {:ok, %{"data" => convos}} -> {:ok, Enum.map(convos, &ConversationResponse.from_map/1)}
         error -> error
       end
     end
@@ -123,7 +156,7 @@ defmodule NornsSdk.Client do
   def get_conversation(%__MODULE__{} = client, agent, key) do
     with {:ok, agent_id} <- resolve_agent_id(client, agent) do
       case get(client, "/api/v1/agents/#{agent_id}/conversations/#{key}") do
-        {:ok, %{"data" => convo}} -> {:ok, convo}
+        {:ok, %{"data" => convo}} -> {:ok, ConversationResponse.from_map(convo)}
         error -> error
       end
     end
@@ -132,6 +165,53 @@ defmodule NornsSdk.Client do
   def delete_conversation(%__MODULE__{} = client, agent, key) do
     with {:ok, agent_id} <- resolve_agent_id(client, agent) do
       delete(client, "/api/v1/agents/#{agent_id}/conversations/#{key}")
+    end
+  end
+
+  # --- Streaming ---
+
+  @doc """
+  Send a message and stream the run's events to a subscriber process.
+
+  Sends the message (fire-and-forget), then starts a `NornsSdk.StreamClient`
+  that joins the run's channel and forwards each event to the subscriber's
+  mailbox as:
+
+      {:norns_event, stream_pid, %NornsSdk.StreamEvent{type: type, data: data}}
+
+  The terminal events are `"completed"` and `"error"`; the stream process stops
+  after forwarding one. If the socket closes first, the subscriber receives
+  `{:norns_closed, stream_pid, reason}`. Returns `{:ok, stream_pid}`.
+
+  ## Options
+
+    * `:subscriber` — pid to receive events (defaults to the calling process).
+    * `:conversation_key` — multi-turn conversation key.
+
+  ## Example
+
+      {:ok, _pid} = NornsSdk.Client.stream(client, "support-bot", "Research quantum computing")
+
+      receive do
+        {:norns_event, _pid, %NornsSdk.StreamEvent{type: "completed"} = ev} ->
+          IO.puts(ev.data["output"])
+      end
+  """
+  @spec stream(t(), integer() | String.t(), String.t(), keyword()) ::
+          {:ok, pid()} | {:error, term()}
+  def stream(%__MODULE__{} = client, agent, content, opts \\ []) do
+    subscriber = Keyword.get(opts, :subscriber, self())
+
+    with {:ok, agent_id} <- resolve_agent_id(client, agent),
+         {:ok, %{"run_id" => run_id}} <-
+           post(client, "/api/v1/agents/#{agent_id}/messages", message_body(content, opts)) do
+      NornsSdk.StreamClient.start_link(
+        base_url: client.base_url,
+        api_key: client.api_key,
+        agent_id: agent_id,
+        run_id: run_id,
+        subscriber: subscriber
+      )
     end
   end
 
@@ -147,8 +227,8 @@ defmodule NornsSdk.Client do
       {:error, :timeout}
     else
       case get_run(client, run_id) do
-        {:ok, %{"status" => status} = run} when status in ["completed", "failed"] ->
-          {:ok, %{run_id: run_id, status: status, output: run["output"]}}
+        {:ok, %RunResponse{status: status} = run} when status in ["completed", "failed", "error"] ->
+          {:ok, run}
 
         {:ok, _} ->
           Process.sleep(interval)
@@ -165,7 +245,7 @@ defmodule NornsSdk.Client do
 
   defp resolve_agent_id(client, name) when is_binary(name) do
     case get_agent(client, name) do
-      {:ok, %{"id" => id}} -> {:ok, id}
+      {:ok, %AgentResponse{id: id}} -> {:ok, id}
       {:error, _} = error -> error
     end
   end

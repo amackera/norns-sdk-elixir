@@ -95,7 +95,7 @@ defmodule NornsSdk.IntegrationTest do
     ensure_agent_exists(agent)
 
     {:ok, found} = Client.get_agent(c, name)
-    assert found["name"] == name
+    assert found.name == name
   end
 
   test "get agent not found", %{client: c} do
@@ -143,7 +143,7 @@ defmodule NornsSdk.IntegrationTest do
     # Let the worker connect and register
     Process.sleep(2_000)
 
-    {:ok, %{"id" => agent_id}} = Client.get_agent(c, name)
+    {:ok, %{id: agent_id}} = Client.get_agent(c, name)
 
     # Send message and wait for completion
     {:ok, result} = Client.send_message(c, agent_id, "hello", wait: true, timeout: 60_000)
@@ -153,15 +153,50 @@ defmodule NornsSdk.IntegrationTest do
 
     # Verify run details
     {:ok, run} = Client.get_run(c, result.run_id)
-    assert run["id"] == result.run_id
-    assert run["status"] == "completed"
+    assert run.run_id == result.run_id
+    assert run.status == "completed"
 
     # Verify events were logged
     {:ok, events} = Client.get_events(c, result.run_id)
     assert is_list(events)
     assert events != []
-    event_types = MapSet.new(events, & &1["event_type"])
+    event_types = MapSet.new(events, & &1.event_type)
     assert "llm_response" in event_types
+  end
+
+  @tag :llm
+  test "stream events for a run", %{client: c} do
+    unless @anthropic_api_key do
+      flunk("ANTHROPIC_API_KEY must be set for LLM tests")
+    end
+
+    name = unique_name("test-stream")
+    agent = create_agent(name)
+    ensure_agent_exists(agent)
+    {:ok, _pid} = start_worker(agent)
+    Process.sleep(2_000)
+
+    {:ok, %{id: agent_id}} = Client.get_agent(c, name)
+    {:ok, _stream_pid} = Client.stream(c, agent_id, "Say hi in one word.")
+
+    events = collect_stream([], 60_000)
+    types = MapSet.new(events, & &1.type)
+    assert "completed" in types
+  end
+
+  defp collect_stream(acc, timeout) do
+    receive do
+      {:norns_event, _pid, %NornsSdk.StreamEvent{type: type} = ev} when type in ["completed", "error"] ->
+        Enum.reverse([ev | acc])
+
+      {:norns_event, _pid, ev} ->
+        collect_stream([ev | acc], timeout)
+
+      {:norns_closed, _pid, _reason} ->
+        Enum.reverse(acc)
+    after
+      timeout -> flunk("stream did not complete within #{timeout}ms")
+    end
   end
 
   # --- Conversations ---
@@ -169,7 +204,7 @@ defmodule NornsSdk.IntegrationTest do
   test "list conversations", %{client: c} do
     case Client.list_agents(c) do
       {:ok, [agent | _]} ->
-        {:ok, convos} = Client.list_conversations(c, agent["id"])
+        {:ok, convos} = Client.list_conversations(c, agent.id)
         assert is_list(convos)
 
       {:ok, []} ->

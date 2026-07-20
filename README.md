@@ -78,9 +78,37 @@ IO.puts(result.output)
 {:ok, result} = NornsSdk.Client.send_message(client, "support-bot", "Follow up",
   conversation_key: "slack:U01ABC", wait: true)
 
-# Inspect runs
+# Inspect runs — reads return typed structs (access fields with dot syntax)
+{:ok, run} = NornsSdk.Client.get_run(client, 42)
+run.status   # "completed"
 {:ok, events} = NornsSdk.Client.get_events(client, 42)
 ```
+
+## Streaming
+
+`stream/4` sends a message and forwards the run's events to a subscriber process
+as they happen. This is the idiomatic Elixir shape — events arrive in your
+mailbox, so it drops straight into a `GenServer` or `LiveView` `handle_info/2`.
+
+```elixir
+{:ok, _stream_pid} = NornsSdk.Client.stream(client, "support-bot", "Research quantum computing")
+
+# Events arrive as {:norns_event, stream_pid, %NornsSdk.StreamEvent{}}.
+# The terminal events are "completed" and "error".
+receive do
+  {:norns_event, _pid, %NornsSdk.StreamEvent{type: "completed"} = ev} ->
+    IO.puts(ev.data["output"])
+
+  {:norns_event, _pid, %NornsSdk.StreamEvent{type: type, data: data}} ->
+    IO.inspect({type, data}, label: "event")
+
+  {:norns_closed, _pid, reason} ->
+    # Socket closed before a terminal event (disconnect / timeout).
+    IO.inspect(reason, label: "stream closed")
+end
+```
+
+Pass `subscriber: pid` to deliver events to a process other than the caller.
 
 ## Docs
 
