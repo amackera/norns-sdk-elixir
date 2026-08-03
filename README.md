@@ -84,6 +84,26 @@ run.status   # "completed"
 {:ok, events} = NornsSdk.Client.get_events(client, 42)
 ```
 
+## Human-in-the-loop
+
+An agent can call the built-in `ask_human` tool to pause and ask a question.
+The run parks with status `"waiting"` until someone answers, and survives a
+restart while parked.
+
+```elixir
+{:ok, result} = NornsSdk.Client.send_message(client, "support-bot", "Book me a table", wait: true)
+
+if NornsSdk.MessageResult.waiting?(result) do
+  IO.puts(result.waiting_for.question)   # "7pm or 8pm?"
+  :ok = NornsSdk.Client.reply(client, result.run_id, "7pm")
+end
+```
+
+`wait: true` returns as soon as the agent parks — it's waiting on you, so it
+won't progress on its own. Sending the agent another message with
+`send_message/4` answers the question too, which is usually what a chat or
+Slack client wants; `reply/3` targets one specific run.
+
 ## Streaming
 
 `stream/4` sends a message and forwards the run's events to a subscriber process

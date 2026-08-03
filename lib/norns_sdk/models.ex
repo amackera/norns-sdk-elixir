@@ -10,6 +10,7 @@ defmodule NornsSdk.RunResponse do
     :agent_id,
     :conversation_id,
     :trigger_type,
+    :waiting_for,
     :inserted_at
   ]
 
@@ -20,6 +21,7 @@ defmodule NornsSdk.RunResponse do
           agent_id: integer(),
           conversation_id: integer() | nil,
           trigger_type: String.t(),
+          waiting_for: NornsSdk.WaitingFor.t() | nil,
           inserted_at: String.t() | nil
         }
 
@@ -33,7 +35,42 @@ defmodule NornsSdk.RunResponse do
       agent_id: data["agent_id"],
       conversation_id: data["conversation_id"],
       trigger_type: Map.get(data, "trigger_type", "message"),
+      waiting_for: NornsSdk.WaitingFor.from_map(data["waiting_for"]),
       inserted_at: data["inserted_at"]
+    }
+  end
+
+  @doc "Whether the run is parked on an `ask_human` question."
+  @spec waiting?(t()) :: boolean()
+  def waiting?(%__MODULE__{status: "waiting"}), do: true
+  def waiting?(%__MODULE__{}), do: false
+end
+
+defmodule NornsSdk.WaitingFor do
+  @moduledoc """
+  The question a run is parked on, present when its status is `"waiting"`.
+
+  Answer it with `NornsSdk.Client.reply/3`, or by sending the agent a normal
+  message — a message to a parked agent is treated as the answer.
+  """
+
+  defstruct [:question, :tool_call_id, :asked_at]
+
+  @type t :: %__MODULE__{
+          question: String.t(),
+          tool_call_id: String.t(),
+          asked_at: String.t() | nil
+        }
+
+  @doc "Parse the `waiting_for` object from a run payload. `nil` passes through."
+  @spec from_map(map() | nil) :: t() | nil
+  def from_map(nil), do: nil
+
+  def from_map(data) when is_map(data) do
+    %__MODULE__{
+      question: data["question"],
+      tool_call_id: data["tool_call_id"],
+      asked_at: data["asked_at"]
     }
   end
 end
@@ -137,17 +174,28 @@ defmodule NornsSdk.MessageResult do
   The result of `NornsSdk.Client.send_message/4`.
 
   When called without `wait: true`, `status` is the accepted status and
-  `output` is `nil`. With `wait: true`, they reflect the terminal run state.
+  `output` is `nil`. With `wait: true`, they reflect the run state that ended
+  the wait.
+
+  A run can stop on `"waiting"` — the agent asked the human a question and is
+  parked. `waiting_for` carries the question; answer it with
+  `NornsSdk.Client.reply/3` or by sending another message.
   """
 
-  defstruct [:run_id, :status, :output, :conversation_key]
+  defstruct [:run_id, :status, :output, :conversation_key, :waiting_for]
 
   @type t :: %__MODULE__{
           run_id: integer(),
           status: String.t(),
           output: String.t() | nil,
-          conversation_key: String.t() | nil
+          conversation_key: String.t() | nil,
+          waiting_for: NornsSdk.WaitingFor.t() | nil
         }
+
+  @doc "Whether the agent is parked on a question rather than finished."
+  @spec waiting?(t()) :: boolean()
+  def waiting?(%__MODULE__{status: "waiting"}), do: true
+  def waiting?(%__MODULE__{}), do: false
 end
 
 defmodule NornsSdk.StreamEvent do

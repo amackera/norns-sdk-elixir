@@ -104,7 +104,8 @@ defmodule NornsSdk.Client do
            run_id: run_id,
            status: run.status,
            output: run.output,
-           conversation_key: Keyword.get(opts, :conversation_key)
+           conversation_key: Keyword.get(opts, :conversation_key),
+           waiting_for: run.waiting_for
          }}
 
       error ->
@@ -119,6 +120,31 @@ defmodule NornsSdk.Client do
       output: nil,
       conversation_key: Keyword.get(opts, :conversation_key)
     }
+  end
+
+  @doc """
+  Answer a run that is parked on an `ask_human` question.
+
+  Sending the agent a normal message with `send_message/4` does the same thing
+  and is usually what a conversational client wants. Use `reply/3` when you
+  want to answer one specific run — for example when an agent has several
+  conversations parked at once.
+
+  ## Example
+
+      {:ok, result} = NornsSdk.Client.send_message(client, "support-bot", "Book it", wait: true)
+
+      if NornsSdk.MessageResult.waiting?(result) do
+        IO.puts(result.waiting_for.question)
+        :ok = NornsSdk.Client.reply(client, result.run_id, "yes, go ahead")
+      end
+  """
+  @spec reply(t(), integer(), String.t()) :: :ok | {:error, term()}
+  def reply(%__MODULE__{} = client, run_id, answer) when is_binary(answer) do
+    case post(client, "/api/v1/runs/#{run_id}/reply", %{"answer" => answer}) do
+      {:ok, _} -> :ok
+      error -> error
+    end
   end
 
   defp message_body(content, opts) do
@@ -227,7 +253,10 @@ defmodule NornsSdk.Client do
       {:error, :timeout}
     else
       case get_run(client, run_id) do
-        {:ok, %RunResponse{status: status} = run} when status in ["completed", "failed", "error"] ->
+        # "waiting" is not terminal, but it is a stopping point: the agent is
+        # parked on a question and will not progress until someone answers.
+        {:ok, %RunResponse{status: status} = run}
+        when status in ["completed", "failed", "error", "waiting"] ->
           {:ok, run}
 
         {:ok, _} ->

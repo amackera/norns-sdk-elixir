@@ -2,6 +2,21 @@
 
 All notable changes to `norns_sdk` are documented in this file.
 
+## [Unreleased]
+
+### Added
+- Human-in-the-loop support. `NornsSdk.WaitingFor` carries the question a run is
+  parked on; `RunResponse` and `MessageResult` gain a `waiting_for` field and a
+  `waiting?/1` helper.
+- `NornsSdk.Client.reply/3` — answer a run parked on an `ask_human` question.
+  Sending the agent a normal message does the same thing; `reply/3` is for
+  answering one specific run.
+
+### Fixed
+- `send_message/4` with `wait: true` now stops on the `"waiting"` run status
+  instead of polling until timeout. A parked agent is waiting on the caller, so
+  it returns with the question rather than hanging.
+
 ## [0.1.0] - 2026-07-20
 
 ### Added

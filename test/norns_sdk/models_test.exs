@@ -25,6 +25,26 @@ defmodule NornsSdk.ModelsTest do
       assert run.trigger_type == "message"
       assert run.output == nil
       assert run.conversation_id == nil
+      assert run.waiting_for == nil
+      refute RunResponse.waiting?(run)
+    end
+
+    test "parses waiting_for on a parked run" do
+      run =
+        RunResponse.from_map(%{
+          "id" => 7,
+          "status" => "waiting",
+          "agent_id" => 2,
+          "waiting_for" => %{
+            "question" => "Book the 7pm show?",
+            "tool_call_id" => "call_ask",
+            "asked_at" => "2026-08-03T00:00:00Z"
+          }
+        })
+
+      assert RunResponse.waiting?(run)
+      assert run.waiting_for.question == "Book the 7pm show?"
+      assert run.waiting_for.tool_call_id == "call_ask"
     end
   end
 
