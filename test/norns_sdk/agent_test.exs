@@ -6,7 +6,7 @@ defmodule NornsSdk.AgentTest do
   test "new/1 creates agent with defaults" do
     agent = Agent.new(name: "test-bot")
     assert agent.name == "test-bot"
-    assert agent.model == "claude-sonnet-4-20250514"
+    assert agent.model == "claude-sonnet-5"
     assert agent.mode == :task
     assert agent.on_failure == :retry_last_step
     assert agent.max_steps == 50

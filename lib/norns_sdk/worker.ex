@@ -3,8 +3,8 @@ defmodule NornsSdk.Worker do
   Worker that connects to Norns, registers agents/tools, and handles tasks.
 
   Uses ReqLLM for LLM calls, supporting any provider (Anthropic, OpenAI, Google, etc.).
-  The provider is inferred from the agent's model string (e.g. `"anthropic:claude-sonnet-4-20250514"`
-  or just `"claude-sonnet-4-20250514"`).
+  The provider is inferred from the agent's model string (e.g. `"anthropic:claude-sonnet-5"`
+  or just `"claude-sonnet-5"`).
 
   Add to your supervision tree:
 
@@ -121,12 +121,12 @@ defmodule NornsSdk.Worker do
   # Receives tasks in neutral format, calls LLM via ReqLLM, returns neutral format.
 
   defp execute_llm(task, api_key) do
-    model_str = task["model"] || "claude-sonnet-4-20250514"
+    model_str = task["model"] || "claude-sonnet-5"
     system_prompt = task["system_prompt"] || ""
     messages = task["messages"] || []
     tools = task["tools"] || []
 
-    # Normalize model string to ReqLLM format (e.g. "anthropic:claude-sonnet-4-20250514")
+    # Normalize model string to ReqLLM format (e.g. "anthropic:claude-sonnet-5")
     model_id = Format.normalize_model(model_str)
 
     # Build ReqLLM context from neutral messages

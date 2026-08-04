@@ -6,7 +6,7 @@ defmodule NornsSdk.Agent do
 
       agent = NornsSdk.Agent.new(
         name: "support-bot",
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-5",
         system_prompt: "You are a customer support agent.",
         tools: [MyTools.SearchDocs, MyTools.SendEmail],
         mode: :conversation,
@@ -17,7 +17,7 @@ defmodule NornsSdk.Agent do
   @enforce_keys [:name]
   defstruct [
     :name,
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-5",
     system_prompt: "",
     tools: [],
     mode: :task,

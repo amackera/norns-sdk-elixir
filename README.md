@@ -45,7 +45,7 @@ end
 
 agent = NornsSdk.Agent.new(
   name: "support-bot",
-  model: "claude-sonnet-4-20250514",
+  model: "claude-sonnet-5",
   system_prompt: "You are a customer support agent.",
   tools: [MyTools.SearchDocs],
   mode: :conversation
